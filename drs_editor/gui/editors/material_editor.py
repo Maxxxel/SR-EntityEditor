@@ -35,7 +35,7 @@ KNOWN_MATERIAL_FLAGS = {
     15: "Unknown Bitflag #16",
     16: "Use Parameter Map",
     17: "Use Normal Map",
-    18: "Use Environment Map",
+    18: "Use Refraction Map",
     19: "Unknown Bitflag #20",
     20: "Disable Receive Shadows",
     21: "Enable SH Lighting",
