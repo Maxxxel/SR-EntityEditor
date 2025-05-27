@@ -1,5 +1,8 @@
 # drs_editor/gui/editors/animation_set_editor.py
 import os
+from typing import List, Optional
+
+# pylance: disable=no-name-in-module
 from PyQt6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -21,98 +24,194 @@ from PyQt6.QtWidgets import (
     QSizePolicy,  # Added
 )
 from PyQt6.QtCore import Qt
+from drs_editor.data_structures.ska_definitions import SKA  # Import SKA definition
 from drs_editor.data_structures.drs_definitions import (
     AnimationSet,
     ModeAnimationKey,
     AnimationSetVariant,
-    AnimationType as DRSAnimationType,  # Renamed to avoid conflict if any
 )
 from drs_editor.file_handlers.drs_handler import DRSHandler
 from drs_editor.gui.log_widget import LogWidget
 from drs_editor.gui.vis_job_data import (
     VIS_JOB_MAP,
-)  # Assuming this is defined in vis_job_data.py
+)
 
 
 class AnimationSetVariantWidget(QGroupBox):
     def __init__(
         self,
-        variant: AnimationSetVariant,
-        # anim_set: AnimationSet, # No longer directly needed by variant widget if it's self-contained
-        drs_handler: DRSHandler,  # May not be needed if variant changes are local until commit
+        # No initial 'variant' argument here; it will be set by update_variant_data
+        anim_set: AnimationSet,  # Parent AnimationSet for context
+        drs_handler: DRSHandler,
         log_widget: LogWidget,
         parent=None,
     ):
-        super().__init__(
-            f"Variant: {variant.file if variant.file else 'New Variant'}", parent
+        super().__init__("Variant Details", parent)  # Generic title
+
+        self.variant: AnimationSetVariant | None = (
+            None  # Will hold the current variant data
         )
-        self.variant = variant
-        # self.anim_set = anim_set
+        self.anim_set = anim_set
         self.drs_handler = drs_handler
         self.log_widget = log_widget
+        self.loaded_ska_data: SKA | None = None
+        self.loaded_ska_datas = {}  # Cache for loaded SKA data
 
-        self.layout = QFormLayout(self)
-        self.layout.setContentsMargins(5, 5, 5, 5)
-        self.layout.setSpacing(5)
+        self.outer_layout = QVBoxLayout(self)
+        self.outer_layout.setContentsMargins(0, 0, 0, 0)
 
-        self.ska_file_edit = QLineEdit(self.variant.file)
-        self.ska_file_edit.editingFinished.connect(self.update_ska_file)
-        self.layout.addRow("SKA File:", self.ska_file_edit)
+        self.props_layout = QFormLayout()
+        self.props_layout.setContentsMargins(5, 5, 5, 5)
+        self.props_layout.setSpacing(5)
+        self.outer_layout.addLayout(self.props_layout)
+
+        self.ska_file_edit = QLineEdit()
+        self.ska_file_edit.editingFinished.connect(self.update_ska_file_name)
+        self.props_layout.addRow("SKA File:", self.ska_file_edit)
 
         self.weight_spin = QSpinBox()
         self.weight_spin.setRange(0, 1000)
-        self.weight_spin.setValue(self.variant.weight)
         self.weight_spin.valueChanged.connect(self.update_weight)
-        self.layout.addRow("Weight:", self.weight_spin)
+        self.props_layout.addRow("Weight:", self.weight_spin)
 
         self.start_spin = QDoubleSpinBox()
-        self.start_spin.setRange(0.0, 1000.0)  # Assuming max duration
+        self.start_spin.setRange(0.0, 1000.0)
         self.start_spin.setDecimals(3)
-        self.start_spin.setValue(self.variant.start)
         self.start_spin.valueChanged.connect(self.update_start)
-        self.layout.addRow("Start:", self.start_spin)
+        self.props_layout.addRow("Start:", self.start_spin)
 
         self.end_spin = QDoubleSpinBox()
-        self.end_spin.setRange(0.0, 1000.0)  # Assuming max duration
+        self.end_spin.setRange(0.0, 1000.0)
         self.end_spin.setDecimals(3)
-        self.end_spin.setValue(self.variant.end)
         self.end_spin.valueChanged.connect(self.update_end)
-        self.layout.addRow("End:", self.end_spin)
+        self.props_layout.addRow("End:", self.end_spin)
 
         self.allows_ik_check = QCheckBox()
-        self.allows_ik_check.setChecked(bool(self.variant.allows_ik))
         self.allows_ik_check.stateChanged.connect(self.update_allows_ik)
-        self.layout.addRow("Allows IK:", self.allows_ik_check)
+        self.props_layout.addRow("Allows IK:", self.allows_ik_check)
 
         self.force_no_blend_check = QCheckBox()
-        self.force_no_blend_check.setChecked(bool(self.variant.forceNoBlend))
         self.force_no_blend_check.stateChanged.connect(self.update_force_no_blend)
-        self.layout.addRow("Force No Blend:", self.force_no_blend_check)
+        self.props_layout.addRow("Force No Blend:", self.force_no_blend_check)
 
-        self.update_field_visibility()
+        self.toggle_ska_edit_button = QPushButton("Show/Edit SKA")
+        self.toggle_ska_edit_button.clicked.connect(self.toggle_ska_editor_visibility)
+        self.props_layout.addRow(self.toggle_ska_edit_button)
 
-        self.edit_ska_button = QPushButton("Edit SKA (NYI)")
-        self.edit_ska_button.clicked.connect(self.open_ska_editor)
-        self.layout.addRow(self.edit_ska_button)
-        self.edit_ska_button.setToolTip(
-            "Open SKA Editor for this animation - Not Yet Implemented"
+        self.ska_editor_group = QGroupBox("SKA Properties")
+        self.ska_editor_layout = QFormLayout(self.ska_editor_group)
+        self.ska_editor_layout.setContentsMargins(5, 5, 5, 5)
+
+        self.ska_type_label = QLabel("N/A")
+        self.ska_editor_layout.addRow("Type:", self.ska_type_label)
+        self.ska_duration_spin = QDoubleSpinBox()
+        self.ska_duration_spin.setDecimals(4)
+        self.ska_duration_spin.setRange(0, 10000.0)
+        self.ska_duration_spin.valueChanged.connect(self.update_ska_duration)
+        self.ska_editor_layout.addRow("Duration:", self.ska_duration_spin)
+        self.ska_repeat_check = QCheckBox("Is Repeating")
+        self.ska_repeat_check.stateChanged.connect(self.update_ska_repeat)
+        self.ska_editor_layout.addRow(self.ska_repeat_check)
+        self.ska_stutter_mode_combo = QComboBox()
+        self.ska_stutter_mode_combo.addItem("Mode 0 (Normal)", 0)
+        self.ska_stutter_mode_combo.addItem("Mode 1", 1)
+        self.ska_stutter_mode_combo.addItem("Mode 2 (Recommended)", 2)
+        self.ska_stutter_mode_combo.currentIndexChanged.connect(
+            self.update_ska_stutter_mode
         )
+        self.ska_editor_layout.addRow("Stutter Mode:", self.ska_stutter_mode_combo)
+        self.ska_editor_layout.addRow(
+            QLabel("<i>Hint: Mode 2 is often preferred...</i>")
+        )
+        self.reload_ska_button = QPushButton("Reload SKA from File")
+        self.reload_ska_button.clicked.connect(self.force_reload_ska_data)
+        self.ska_editor_layout.addRow(self.reload_ska_button)
+        self.ska_editor_group.setVisible(False)
+        self.outer_layout.addWidget(self.ska_editor_group)
 
-    def update_variant_data(self, variant: AnimationSetVariant):
-        """Updates the widget to display data from a new variant object."""
-        self.variant = variant
+        self.clear_ui_fields()
+        self.setEnabled(False)
+
+    def clear_ui_fields(self):
+        """Resets UI fields to a blank/default state and disables interactions."""
+        self.setTitle("Variant Details")
+        # Block signals while clearing to prevent unintended updates
+        for widget in [
+            self.ska_file_edit,
+            self.weight_spin,
+            self.start_spin,
+            self.end_spin,
+            self.allows_ik_check,
+            self.force_no_blend_check,
+            self.ska_duration_spin,
+            self.ska_repeat_check,
+            self.ska_stutter_mode_combo,
+        ]:
+            widget.blockSignals(True)
+
+        self.ska_file_edit.setText("")
+        self.weight_spin.setValue(0)
+        self.start_spin.setValue(0.0)
+        self.end_spin.setValue(0.0)
+        self.allows_ik_check.setChecked(False)
+        self.force_no_blend_check.setChecked(False)
+
+        # Simulate a low version variant to hide conditional fields correctly
+        dummy_variant_for_visibility = AnimationSetVariant(version=0)  # Create a dummy
+        self._update_variant_field_visibility_from_data(dummy_variant_for_visibility)
+
+        self.loaded_ska_data = None
+        self.ska_editor_group.setVisible(False)
+        self.toggle_ska_edit_button.setText("Show/Edit SKA")
+        self.toggle_ska_edit_button.setEnabled(
+            False
+        )  # Disable SKA button when no variant
+        self.ska_type_label.setText("N/A")
+        self.ska_duration_spin.setValue(0)
+        self.ska_repeat_check.setChecked(False)
+        self.ska_stutter_mode_combo.setCurrentIndex(0)
+
+        for widget in [
+            self.ska_file_edit,
+            self.weight_spin,
+            self.start_spin,
+            self.end_spin,
+            self.allows_ik_check,
+            self.force_no_blend_check,
+            self.ska_duration_spin,
+            self.ska_repeat_check,
+            self.ska_stutter_mode_combo,
+        ]:
+            widget.blockSignals(False)
+
+    def _update_variant_data_ui(self, variant_to_display: AnimationSetVariant | None):
+        """Helper to populate UI fields from a variant object."""
+        self.variant = variant_to_display
+
+        if not self.variant:
+            self.clear_ui_fields()
+            self.setEnabled(False)  # Disable the entire GroupBox
+            return
+
+        self.setEnabled(True)  # Enable the GroupBox
+        widgets_to_block = [
+            self.ska_file_edit,
+            self.weight_spin,
+            self.start_spin,
+            self.end_spin,
+            self.allows_ik_check,
+            self.force_no_blend_check,
+            self.ska_duration_spin,
+            self.ska_repeat_check,
+            self.ska_stutter_mode_combo,
+            self.toggle_ska_edit_button,
+        ]
+        for w in widgets_to_block:
+            w.blockSignals(True)
+
         self.setTitle(
-            f"Variant: {self.variant.file if self.variant.file else 'New Variant'}"
+            f"Variant: {self.variant.file if self.variant.file else 'New/Untitled Variant'}"
         )
-
-        # Block signals while updating UI
-        self.ska_file_edit.blockSignals(True)
-        self.weight_spin.blockSignals(True)
-        self.start_spin.blockSignals(True)
-        self.end_spin.blockSignals(True)
-        self.allows_ik_check.blockSignals(True)
-        self.force_no_blend_check.blockSignals(True)
-
         self.ska_file_edit.setText(self.variant.file)
         self.weight_spin.setValue(self.variant.weight)
         self.start_spin.setValue(self.variant.start)
@@ -120,121 +219,403 @@ class AnimationSetVariantWidget(QGroupBox):
         self.allows_ik_check.setChecked(bool(self.variant.allows_ik))
         self.force_no_blend_check.setChecked(bool(self.variant.forceNoBlend))
 
-        self.ska_file_edit.blockSignals(False)
-        self.weight_spin.blockSignals(False)
-        self.start_spin.blockSignals(False)
-        self.end_spin.blockSignals(False)
-        self.allows_ik_check.blockSignals(False)
-        self.force_no_blend_check.blockSignals(False)
+        self._update_variant_field_visibility_from_data(self.variant)
 
-        self.update_field_visibility()
+        self.loaded_ska_data = None
+        self.ska_editor_group.setVisible(False)
+        self.toggle_ska_edit_button.setText("Show/Edit SKA")
+        self.toggle_ska_edit_button.setEnabled(
+            bool(self.variant.file)
+        )  # Enable if there's a filename
 
-    def update_field_visibility(self):
-        # This method should be called whenever variant.version might change,
-        # or when the widget is first populated.
-        if not hasattr(self.variant, "version"):  # Should always have it
+        self.ska_type_label.setText("N/A")
+        self.ska_duration_spin.setValue(0)
+        self.ska_repeat_check.setChecked(False)
+        self.ska_stutter_mode_combo.setCurrentIndex(0)
+
+        for w in widgets_to_block:
+            w.blockSignals(False)
+
+    def update_variant_data(self, new_variant_data: AnimationSetVariant | None):
+        """Public method to update the widget with new variant data."""
+        if new_variant_data:
+            self.log_widget.log_message(
+                f"Displaying Variant details for: {new_variant_data.file}"
+            )
+            self._update_variant_data_ui(new_variant_data)
+        else:
+            self.log_widget.log_message("Clearing Variant details display.")
+            self._update_variant_data_ui(
+                None
+            )  # This will call clear_ui_fields and disable
+
+    def _update_variant_field_visibility_from_data(
+        self, variant_data: AnimationSetVariant
+    ):
+        version = variant_data.version
+        form_layout = self.props_layout
+        # ... (visibility logic as previously defined, ensure it uses form_layout correctly)
+        start_visible = version >= 4
+        self.start_spin.setVisible(start_visible)
+        label = form_layout.labelForField(self.start_spin)
+        if label:
+            label.setVisible(start_visible)
+
+        end_visible = version >= 4
+        self.end_spin.setVisible(end_visible)
+        label = form_layout.labelForField(self.end_spin)
+        if label:
+            label.setVisible(end_visible)
+
+        allows_ik_visible = version >= 5
+        self.allows_ik_check.setVisible(allows_ik_visible)
+        label = form_layout.labelForField(self.allows_ik_check)
+        if label:
+            label.setVisible(allows_ik_visible)
+
+        force_no_blend_visible = version >= 7
+        self.force_no_blend_check.setVisible(force_no_blend_visible)
+        label = form_layout.labelForField(self.force_no_blend_check)
+        if label:
+            label.setVisible(force_no_blend_visible)
+
+    def update_variant_field_visibility(self):
+        if self.variant:
+            self._update_variant_field_visibility_from_data(self.variant)
+        else:
+            dummy_variant = AnimationSetVariant(version=0)
+            self._update_variant_field_visibility_from_data(dummy_variant)
+
+    def update_ska_file_name(self):
+        if not self.variant:
             return
-
-        version = self.variant.version
-        form_layout = self.layout
-
-        # Ensure labels are correctly accessed and their visibility toggled
-        start_label = form_layout.labelForField(self.start_spin)
-        if start_label:
-            start_label.setVisible(version >= 4)
-        self.start_spin.setVisible(version >= 4)
-
-        end_label = form_layout.labelForField(self.end_spin)
-        if end_label:
-            end_label.setVisible(version >= 4)
-        self.end_spin.setVisible(version >= 4)
-
-        allows_ik_label = form_layout.labelForField(self.allows_ik_check)
-        if allows_ik_label:
-            allows_ik_label.setVisible(version >= 5)
-        self.allows_ik_check.setVisible(version >= 5)
-
-        force_no_blend_label = form_layout.labelForField(self.force_no_blend_check)
-        if force_no_blend_label:
-            force_no_blend_label.setVisible(version >= 7)
-        self.force_no_blend_check.setVisible(version >= 7)
-
-    def update_ska_file(self):
         new_file = self.ska_file_edit.text()
         if self.variant.file != new_file:
             self.variant.file = new_file
-            self.variant.length = len(
-                new_file.encode("utf-8")
-            )  # Ensure length is updated
+            self.variant.length = len(new_file.encode("utf-8"))
             self.setTitle(f"Variant: {new_file if new_file else 'Untitled'}")
-            self.log_widget.log_message(f"Variant SKA file changed to: {new_file}")
-            # TODO: Update the display name in the parent QListWidget (Middle Panel)
+            self.log_widget.log_message(f"Variant SKA file name changed to: {new_file}")
+            self.loaded_ska_data = None
+            if self.ska_editor_group.isVisible():
+                self.ska_editor_group.setVisible(False)
+            self.toggle_ska_edit_button.setText("Show/Edit SKA")
+            self.toggle_ska_edit_button.setEnabled(
+                bool(self.variant.file)
+            )  # Update button state
 
     def update_weight(self, value):
+        if not self.variant:
+            return
         self.variant.weight = value
+        self.log_if_changed("Weight", value)
 
     def update_start(self, value):
+        if not self.variant:
+            return
         self.variant.start = value
+        self.log_if_changed("Start", value)
 
     def update_end(self, value):
+        if not self.variant:
+            return
         self.variant.end = value
+        self.log_if_changed("End", value)
 
     def update_allows_ik(self, state):
+        if not self.variant:
+            return
         self.variant.allows_ik = 1 if state == Qt.CheckState.Checked.value else 0
+        self.log_if_changed("Allows IK", self.variant.allows_ik)
 
     def update_force_no_blend(self, state):
+        if not self.variant:
+            return
         self.variant.forceNoBlend = 1 if state == Qt.CheckState.Checked.value else 0
+        self.log_if_changed("Force No Blend", self.variant.forceNoBlend)
 
-    def open_ska_editor(self):
-        # ... (SKA editor logic remains the same) ...
+    def log_if_changed(self, prop_name, new_value_display):
+        variant_file_name = self.variant.file if self.variant else "N/A"
         self.log_widget.log_message(
-            f"Attempting to open SKA editor for: {self.variant.file} (Not Yet Implemented)"
+            f"Variant '{variant_file_name}' {prop_name} set to: {new_value_display}"
         )
-        ska_file_path = ""
-        if self.drs_handler.filepath and self.variant.file:
-            base_dir = os.path.dirname(self.drs_handler.filepath)
-            # Construct path more robustly, assuming variant.file might or might not have .ska
-            base_ska_name = self.variant.file
-            if not base_ska_name.lower().endswith(".ska"):
-                base_ska_name += ".ska"
 
-            potential_path = os.path.join(base_dir, base_ska_name)
+    def toggle_ska_editor_visibility(self):
+        if not self.variant:
+            self.ska_editor_group.setVisible(False)
+            return
 
-            if not os.path.exists(potential_path) and not os.path.isabs(
-                self.variant.file
-            ):
-                # Try common subdirectories if not found directly and not absolute
-                common_subdirs = [
-                    "../anim",
-                    "../animations",
-                    "../ska",
-                    "anim",
-                    "animations",
-                    "ska",
-                ]
-                for subdir in common_subdirs:
-                    test_path = os.path.join(base_dir, subdir, base_ska_name)
-                    if os.path.exists(test_path):
-                        potential_path = test_path
-                        break
-
-            if os.path.exists(potential_path):
-                ska_file_path = potential_path
+        if self.ska_editor_group.isVisible():
+            self.ska_editor_group.setVisible(False)
+            self.toggle_ska_edit_button.setText("Show/Edit SKA")
+        else:
+            if not self.variant.file:
                 QMessageBox.information(
-                    self,
-                    "SKA Editor",
-                    f"SKA Editor for {ska_file_path} would open here (NYI).",
+                    self, "No SKA File", "SKA filename is not set for this variant."
                 )
-            else:
+                self.toggle_ska_edit_button.setEnabled(False)  # Disable if no file
+                return
+
+            self.toggle_ska_edit_button.setEnabled(
+                True
+            )  # Ensure enabled if there's a file
+            if not self.loaded_ska_data:
+                self.load_ska_data_action()
+
+            if self.loaded_ska_data:
+                self.populate_ska_editor_fields()
+                self.ska_editor_group.setVisible(True)
+                self.toggle_ska_edit_button.setText("Hide SKA Editor")
+
+    def _get_ska_full_path(self) -> str | None:
+        if not self.drs_handler.filepath or not self.variant or not self.variant.file:
+            return None
+        base_dir = os.path.dirname(self.drs_handler.filepath)
+        ska_filename = self.variant.file
+        name_to_check = ska_filename
+        if not name_to_check.lower().endswith(".ska"):
+            name_to_check += ".ska"
+        path_to_try = os.path.join(base_dir, name_to_check)
+        if os.path.exists(path_to_try):
+            return path_to_try
+        return None
+
+    def load_ska_data_action(self, force_reload=False):
+        if not self.variant:
+            return False
+        if not force_reload and self.loaded_ska_data:
+            self.log_widget.log_message(
+                f"SKA data for '{self.variant.file}' already loaded. Using cached."
+            )
+            return True
+        self.loaded_ska_data = None
+        ska_full_path = self._get_ska_full_path()
+        if ska_full_path:
+            try:
+                # Check if the Data is already loaded in our loaded_ska_datas
+                if ska_full_path in self.loaded_ska_datas and not force_reload:
+                    self.loaded_ska_data = self.loaded_ska_datas[ska_full_path]
+                    self.log_widget.log_message(
+                        f"Using cached SKA data for: {ska_full_path}"
+                    )
+                    return True
+                ska = SKA()
+                ska.read(ska_full_path)
+                self.loaded_ska_data = ska
+                self.loaded_ska_datas[ska_full_path] = ska
+                self.log_widget.log_message(
+                    f"Successfully {'re' if force_reload else ''}loaded SKA: {ska_full_path}"
+                )
+                return True
+            except Exception as e:
+                self.log_widget.log_message(
+                    f"Error {'re' if force_reload else ''}loading SKA file '{ska_full_path}': {e}"
+                )
+                QMessageBox.warning(
+                    self,
+                    "SKA Load Error",
+                    f"Could not {'re' if force_reload else ''}load SKA file:\n{ska_full_path}\n\nError: {e}",
+                )
+                return False
+        else:
+            self.log_widget.log_message(
+                f"SKA file not found for variant: {self.variant.file}"
+            )
+            if (
+                force_reload or self.toggle_ska_edit_button.text() == "Hide SKA Editor"
+            ):  # Show warning if actively trying to load
                 QMessageBox.warning(
                     self,
                     "SKA File Not Found",
-                    f"Could not find SKA file: {base_ska_name}\nSearched near: {os.path.dirname(potential_path)}",
+                    f"SKA file for '{self.variant.file}' not found near DRS or in common anim subdirectories.",
                 )
-        else:
-            QMessageBox.warning(
-                self, "SKA File", "SKA filename or DRS path is not set."
+            return False
+
+    def force_reload_ska_data(self):
+        if not self.variant or not self.variant.file:
+            QMessageBox.information(
+                self,
+                "No SKA File",
+                "Cannot reload: SKA filename is not set for this variant.",
             )
+            return
+        if self.load_ska_data_action(force_reload=True):
+            if self.loaded_ska_data:
+                self.populate_ska_editor_fields()
+                if not self.ska_editor_group.isVisible():
+                    self.ska_editor_group.setVisible(True)
+                    self.toggle_ska_edit_button.setText("Hide SKA Editor")
+                self.log_widget.log_message(
+                    f"SKA data for '{self.variant.file}' reloaded and editor updated."
+                )
+            else:
+                self.ska_editor_group.setVisible(False)
+                self.toggle_ska_edit_button.setText("Show/Edit SKA")
+
+    def populate_ska_editor_fields(self):
+        if not self.loaded_ska_data:
+            return
+        ska = self.loaded_ska_data
+        widgets_to_block = [
+            self.ska_duration_spin,
+            self.ska_repeat_check,
+            self.ska_stutter_mode_combo,
+        ]
+        for w in widgets_to_block:
+            w.blockSignals(True)
+        self.ska_type_label.setText(str(ska.type))
+        self.ska_duration_spin.setValue(ska.duration)
+        self.ska_repeat_check.setChecked(bool(ska.repeat))
+        stutter_index = self.ska_stutter_mode_combo.findData(ska.stutter_mode)
+        if stutter_index != -1:
+            self.ska_stutter_mode_combo.setCurrentIndex(stutter_index)
+        else:
+            self.ska_stutter_mode_combo.setCurrentIndex(0)
+            self.log_widget.log_message(
+                f"Warning: SKA Stutter Mode {ska.stutter_mode} is unexpected. Defaulting display."
+            )
+        for w in widgets_to_block:
+            w.blockSignals(False)
+
+    def update_ska_duration(self, value):
+        if self.loaded_ska_data and self.loaded_ska_data.duration != value:
+            self.loaded_ska_data.duration = value
+            self.log_widget.log_message(
+                f"SKA '{self.variant.file if self.variant else 'N/A'}' duration changed to: {value}"
+            )
+
+    def update_ska_repeat(self, state):
+        if self.loaded_ska_data:
+            new_val = 1 if state == Qt.CheckState.Checked.value else 0
+            if self.loaded_ska_data.repeat != new_val:
+                self.loaded_ska_data.repeat = new_val
+                self.log_widget.log_message(
+                    f"SKA '{self.variant.file if self.variant else 'N/A'}' repeat changed to: {bool(new_val)}"
+                )
+
+    def update_ska_stutter_mode(self, index):
+        if self.loaded_ska_data:
+            new_val = self.ska_stutter_mode_combo.itemData(index)
+            if new_val is not None and self.loaded_ska_data.stutter_mode != new_val:
+                self.loaded_ska_data.stutter_mode = new_val
+                self.log_widget.log_message(
+                    f"SKA '{self.variant.file if self.variant else 'N/A'}' stutter mode changed to: {new_val}"
+                )
+
+
+class ModeAnimationKeyWidget(QGroupBox):
+    def __init__(
+        self,
+        mode_key: ModeAnimationKey,
+        anim_set: AnimationSet,
+        drs_handler: DRSHandler,
+        log_widget: LogWidget,
+        parent=None,
+    ):
+        vis_job_id = mode_key.vis_job
+        vis_job_text = VIS_JOB_MAP.get(vis_job_id, f"Unknown Job (ID: {vis_job_id})")
+        if len(vis_job_text) > 45:
+            vis_job_text = vis_job_text[:42] + "..."  # Truncate for title
+        super().__init__(f"Key: {vis_job_text}", parent)
+        # ... (rest of ModeAnimationKeyWidget as in your last version, with the vis_job_combo logic)
+        self.mode_key = mode_key
+        self.anim_set = anim_set
+        self.drs_handler = drs_handler
+        self.log_widget = log_widget
+
+        self.main_layout = QVBoxLayout(self)
+        self.details_layout = QFormLayout()
+        self.main_layout.addLayout(self.details_layout)
+
+        self.vis_job_combo = QComboBox()
+        self.vis_job_combo.setToolTip("Select the visual job/animation type.")
+        # Sort VIS_JOB_MAP by value (description string) for user-friendly order
+        for job_id, description in sorted(
+            VIS_JOB_MAP.items(), key=lambda item: item[1]
+        ):
+            self.vis_job_combo.addItem(f"{description} (ID: {job_id})", userData=job_id)
+
+        current_vis_job_id = self.mode_key.vis_job
+        index = self.vis_job_combo.findData(current_vis_job_id)
+        if index != -1:
+            self.vis_job_combo.setCurrentIndex(index)
+        else:
+            # Add the current unknown ID if not in map, and select it
+            unknown_item_text = f"Custom/Unknown Vis Job (ID: {current_vis_job_id})"
+            self.vis_job_combo.addItem(unknown_item_text, userData=current_vis_job_id)
+            self.vis_job_combo.setCurrentText(unknown_item_text)  # Select it
+            self.log_widget.log_message(
+                f"Warning: Vis Job ID {current_vis_job_id} not in predefined map. Added as custom entry."
+            )
+
+        self.vis_job_combo.currentIndexChanged.connect(self.update_vis_job_and_title)
+        self.details_layout.addRow("Vis Job:", self.vis_job_combo)
+
+        self.type_label = QLabel(str(self.mode_key.type))
+        self.details_layout.addRow("Type (Internal):", self.type_label)
+
+        # ModeAnimationKey.file is usually "Battleforge" or a similar key, not a user-friendly name for the group
+        # self.key_name_label = QLabel(self.mode_key.file)
+        # self.details_layout.addRow("Key File Source:", self.key_name_label)
+
+        self.variants_container = QWidget()
+        self.variants_layout = QVBoxLayout(self.variants_container)
+        self.variants_layout.setContentsMargins(0, 5, 0, 0)
+        self.variants_layout.setSpacing(3)
+
+        self.main_layout.addWidget(QLabel("<b>Variants:</b>"))
+        self.main_layout.addWidget(self.variants_container)
+
+        self.refresh_variants_ui()
+
+        add_variant_button = QPushButton("Add Variant to this Key")
+        add_variant_button.clicked.connect(self.add_variant)
+        self.main_layout.addWidget(add_variant_button)
+
+    def update_vis_job_and_title(self, index):
+        selected_job_id = self.vis_job_combo.itemData(index)
+        if selected_job_id is not None and self.mode_key.vis_job != selected_job_id:
+            self.mode_key.vis_job = selected_job_id
+            new_title_desc = self.vis_job_combo.currentText().split(" (ID:")[0]
+            if len(new_title_desc) > 45:
+                new_title_desc = new_title_desc[:42] + "..."
+            self.setTitle(f"Key: {new_title_desc}")
+            self.log_widget.log_message(
+                f"Vis Job for key set to ID: {selected_job_id} ({self.vis_job_combo.currentText()})"
+            )
+
+    def refresh_variants_ui(self):
+        while self.variants_layout.count():
+            child = self.variants_layout.takeAt(0)
+            if child.widget():
+                child.widget().deleteLater()
+
+        if not self.mode_key.animation_set_variants:
+            self.variants_layout.addWidget(
+                QLabel("<i>No variants defined for this key.</i>")
+            )
+        else:
+            for variant in self.mode_key.animation_set_variants:
+                var_widget = AnimationSetVariantWidget(
+                    variant, self.anim_set, self.drs_handler, self.log_widget
+                )
+                self.variants_layout.addWidget(var_widget)
+
+    def add_variant(self):
+        new_variant = AnimationSetVariant()
+        new_variant.file = f"new_ska_{len(self.mode_key.animation_set_variants) + 1}"
+        new_variant.length = len(new_variant.file.encode("utf-8"))
+        if self.mode_key.type == 6:
+            new_variant.version = 7
+        elif self.mode_key.type <= 5:
+            new_variant.version = 5
+        else:
+            new_variant.version = self.anim_set.version if self.anim_set else 7
+        self.mode_key.animation_set_variants.append(new_variant)
+        self.mode_key.variant_count = len(self.mode_key.animation_set_variants)
+        self.log_widget.log_message(
+            f"Added new variant to key (VisJob: {VIS_JOB_MAP.get(self.mode_key.vis_job, self.mode_key.vis_job)})"
+        )
+        self.refresh_variants_ui()
 
 
 class AnimationSetEditorWidget(QWidget):
@@ -579,7 +960,9 @@ class AnimationSetEditorWidget(QWidget):
         self.clear_mode_key_details()  # Also clear details and variant list
         if self.animation_set_data and self.animation_set_data.mode_animation_keys:
             for i, mode_key in enumerate(self.animation_set_data.mode_animation_keys):
-                display_text = f"{i+1}. {mode_key.file if mode_key.file else 'Untitled Key'} (VisJob: {VIS_JOB_MAP.get(mode_key.vis_job, str(mode_key.vis_job))})"
+                display_text = (
+                    f"{i+1}. {VIS_JOB_MAP.get(mode_key.vis_job, str(mode_key.vis_job))}"
+                )
                 item = QListWidgetItem(display_text)
                 item.setData(Qt.ItemDataRole.UserRole, mode_key)  # Store ref to object
                 self.mode_keys_list_widget.addItem(item)
@@ -682,7 +1065,9 @@ class AnimationSetEditorWidget(QWidget):
         if self.current_variant:
             if not self.active_variant_widget:  # Create if it doesn't exist
                 self.active_variant_widget = AnimationSetVariantWidget(
-                    self.current_variant, self.drs_handler, self.log_widget
+                    self.animation_set_data,
+                    self.drs_handler,
+                    self.log_widget,
                 )
                 self.variant_detail_scroll_area.setWidget(self.active_variant_widget)
             else:  # Reuse and update
