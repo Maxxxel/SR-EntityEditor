@@ -184,6 +184,29 @@ class AnimationSetVariantWidget(QGroupBox):
         self.ska_editor_group.setVisible(False)
         self.outer_layout.addWidget(self.ska_editor_group)
 
+        self.versioned_fields: list[tuple[QWidget, QLabel, dict[str, Any]]] = [
+            (
+                self.start_spin,
+                self.props_layout.labelForField(self.start_spin),
+                {"min_version": 4},
+            ),
+            (
+                self.end_spin,
+                self.props_layout.labelForField(self.end_spin),
+                {"min_version": 4},
+            ),
+            (
+                self.allows_ik_check,
+                self.props_layout.labelForField(self.allows_ik_check),
+                {"min_version": 5},
+            ),
+            (
+                self.force_no_blend_check,
+                self.props_layout.labelForField(self.force_no_blend_check),
+                {"min_version": 7},
+            ),
+        ]
+
         self.clear_ui_fields()
         self.setEnabled(False)
 
@@ -214,9 +237,7 @@ class AnimationSetVariantWidget(QGroupBox):
             dummy_variant_for_visibility = AnimationSetVariant(
                 version=0
             )  # Create a dummy
-            self._update_variant_field_visibility_from_data(
-                dummy_variant_for_visibility
-            )
+            self._update_variant_field_visibility(dummy_variant_for_visibility.version)
 
             self.loaded_ska_data = None
             self.ska_editor_group.setVisible(False)
@@ -263,7 +284,7 @@ class AnimationSetVariantWidget(QGroupBox):
             self.allows_ik_check.setChecked(bool(self.variant.allows_ik))
             self.force_no_blend_check.setChecked(bool(self.variant.forceNoBlend))
 
-            self._update_variant_field_visibility_from_data(self.variant)
+            self._update_variant_field_visibility(self.variant.version)
 
             self.loaded_ska_data = None
             self.ska_editor_group.setVisible(False)
@@ -290,42 +311,21 @@ class AnimationSetVariantWidget(QGroupBox):
                 None
             )  # This will call clear_ui_fields and disable
 
-    def _update_variant_field_visibility_from_data(
-        self, variant_data: AnimationSetVariant
-    ):
-        version = variant_data.version
-        form_layout = self.props_layout
-        # ... (visibility logic as previously defined, ensure it uses form_layout correctly)
-        start_visible = version >= 4
-        self.start_spin.setVisible(start_visible)
-        label = form_layout.labelForField(self.start_spin)
-        if label:
-            label.setVisible(start_visible)
-
-        end_visible = version >= 4
-        self.end_spin.setVisible(end_visible)
-        label = form_layout.labelForField(self.end_spin)
-        if label:
-            label.setVisible(end_visible)
-
-        allows_ik_visible = version >= 5
-        self.allows_ik_check.setVisible(allows_ik_visible)
-        label = form_layout.labelForField(self.allows_ik_check)
-        if label:
-            label.setVisible(allows_ik_visible)
-
-        force_no_blend_visible = version >= 7
-        self.force_no_blend_check.setVisible(force_no_blend_visible)
-        label = form_layout.labelForField(self.force_no_blend_check)
-        if label:
-            label.setVisible(force_no_blend_visible)
+    def _update_variant_field_visibility(self, version: int):
+        for widget, label, conditions in self.versioned_fields:
+            visible = True
+            if "min_version" in conditions and version < conditions["min_version"]:
+                visible = False
+            widget.setVisible(visible)
+            if label:
+                label.setVisible(visible)
 
     def update_variant_field_visibility(self):
         if self.variant:
-            self._update_variant_field_visibility_from_data(self.variant)
+            self._update_variant_field_visibility(self.variant.version)
         else:
             dummy_variant = AnimationSetVariant(version=0)
-            self._update_variant_field_visibility_from_data(dummy_variant)
+            self._update_variant_field_visibility(dummy_variant.version)
 
     def update_ska_file_name(self):
         if not self.variant:
