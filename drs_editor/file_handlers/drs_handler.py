@@ -10,9 +10,7 @@ class DRSHandler:
     def load_drs(self, filepath: str) -> tuple[bool, str]:
         """Loads a .drs file into the drs_object."""
         try:
-            self.drs_object = (
-                DRS()
-            )  # Assuming DRS() can be initialized without model_type for reading
+            self.drs_object = DRS()
             self.drs_object.read(filepath)  #
             self.filepath = filepath
             # Determine model_type after loading, if possible, or set based on common structures
