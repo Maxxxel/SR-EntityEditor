@@ -1,6 +1,5 @@
 # drs_editor/gui/editors/animation_set_editor.py
 import os
-from typing import List, Optional
 
 # pylance: disable=no-name-in-module
 from PyQt6.QtWidgets import (
@@ -18,13 +17,13 @@ from PyQt6.QtWidgets import (
     QDoubleSpinBox,
     QMessageBox,
     QComboBox,
-    QSplitter,  # Added
-    QListWidget,  # Added
-    QListWidgetItem,  # Added
-    QSizePolicy,  # Added
+    QSplitter,
+    QListWidget,
+    QListWidgetItem,
+    QSizePolicy,
 )
 from PyQt6.QtCore import Qt
-from drs_editor.data_structures.ska_definitions import SKA  # Import SKA definition
+from drs_editor.data_structures.ska_definitions import SKA
 from drs_editor.data_structures.drs_definitions import (
     AnimationSet,
     ModeAnimationKey,
