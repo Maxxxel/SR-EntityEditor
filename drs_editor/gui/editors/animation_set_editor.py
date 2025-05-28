@@ -1,7 +1,6 @@
 # drs_editor/gui/editors/animation_set_editor.py
 import os
 
-# pylance: disable=no-name-in-module
 from PyQt6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -20,7 +19,6 @@ from PyQt6.QtWidgets import (
     QSplitter,
     QListWidget,
     QListWidgetItem,
-    QSizePolicy,
 )
 from PyQt6.QtCore import Qt
 from drs_editor.data_structures.ska_definitions import SKA

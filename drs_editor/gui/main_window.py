@@ -8,7 +8,6 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QDockWidget,
     QLabel,
-    QSizePolicy,  # Added
 )
 from PyQt6.QtGui import QAction, QKeySequence
 from PyQt6.QtCore import Qt, pyqtSlot

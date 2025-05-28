@@ -1,5 +1,4 @@
 # drs_editor/gui/mesh_editor_tab.py
-# pylance: disable=no-name-in-module
 from PyQt6.QtWidgets import (
     QWidget,
     QVBoxLayout,
