@@ -1,6 +1,8 @@
 # drs_editor/gui/editors/animation_set_editor.py
 import os
 
+from contextlib import contextmanager
+from typing import Any, Callable, Optional
 from PyQt6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -32,6 +34,35 @@ from drs_editor.gui.log_widget import LogWidget
 from drs_editor.gui.vis_job_data import (
     VIS_JOB_MAP,
 )
+
+
+@contextmanager
+def signal_blocker(*widgets: QWidget):
+    original_states = {widget: widget.signalsBlocked() for widget in widgets}
+    try:
+        for widget in widgets:
+            widget.blockSignals(True)
+        yield
+    finally:
+        for widget in widgets:
+            widget.blockSignals(original_states[widget])
+
+
+def create_form_row(
+    layout: QFormLayout,
+    label_text: str,
+    widget: QWidget,
+    changed_signal: Any = None,
+    handler: Optional[Callable] = None,
+):
+    label = QLabel(label_text)
+    layout.addRow(label, widget)
+    if changed_signal and handler:
+        changed_signal.connect(handler)
+    return (
+        label,
+        widget,
+    )
 
 
 class AnimationSetVariantWidget(QGroupBox):
@@ -68,28 +99,55 @@ class AnimationSetVariantWidget(QGroupBox):
 
         self.weight_spin = QSpinBox()
         self.weight_spin.setRange(0, 1000)
-        self.weight_spin.valueChanged.connect(self.update_weight)
-        self.props_layout.addRow("Weight:", self.weight_spin)
+        create_form_row(
+            self.props_layout,
+            "Weight:",
+            self.weight_spin,
+            self.weight_spin.valueChanged,
+            self.update_weight,
+        )
 
         self.start_spin = QDoubleSpinBox()
         self.start_spin.setRange(0.0, 1000.0)
         self.start_spin.setDecimals(3)
-        self.start_spin.valueChanged.connect(self.update_start)
-        self.props_layout.addRow("Start:", self.start_spin)
+        create_form_row(
+            self.props_layout,
+            "Start:",
+            self.start_spin,
+            self.start_spin.valueChanged,
+            self.update_start,
+        )
 
         self.end_spin = QDoubleSpinBox()
         self.end_spin.setRange(0.0, 1000.0)
         self.end_spin.setDecimals(3)
-        self.end_spin.valueChanged.connect(self.update_end)
-        self.props_layout.addRow("End:", self.end_spin)
+        create_form_row(
+            self.props_layout,
+            "End:",
+            self.end_spin,
+            self.end_spin.valueChanged,
+            self.update_end,
+        )
 
         self.allows_ik_check = QCheckBox()
         self.allows_ik_check.stateChanged.connect(self.update_allows_ik)
-        self.props_layout.addRow("Allows IK:", self.allows_ik_check)
+        create_form_row(
+            self.props_layout,
+            "Allows IK:",
+            self.allows_ik_check,
+            self.allows_ik_check.stateChanged,
+            self.update_allows_ik,
+        )
 
         self.force_no_blend_check = QCheckBox()
         self.force_no_blend_check.stateChanged.connect(self.update_force_no_blend)
-        self.props_layout.addRow("Force No Blend:", self.force_no_blend_check)
+        create_form_row(
+            self.props_layout,
+            "Force No Blend:",
+            self.force_no_blend_check,
+            self.force_no_blend_check.stateChanged,
+            self.update_force_no_blend,
+        )
 
         self.toggle_ska_edit_button = QPushButton("Show/Edit SKA")
         self.toggle_ska_edit_button.clicked.connect(self.toggle_ska_editor_visibility)
@@ -133,7 +191,7 @@ class AnimationSetVariantWidget(QGroupBox):
         """Resets UI fields to a blank/default state and disables interactions."""
         self.setTitle("Variant Details")
         # Block signals while clearing to prevent unintended updates
-        for widget in [
+        widgets_to_block = [
             self.ska_file_edit,
             self.weight_spin,
             self.start_spin,
@@ -143,43 +201,33 @@ class AnimationSetVariantWidget(QGroupBox):
             self.ska_duration_spin,
             self.ska_repeat_check,
             self.ska_stutter_mode_combo,
-        ]:
-            widget.blockSignals(True)
+        ]
+        with signal_blocker(*widgets_to_block):
+            self.ska_file_edit.setText("")
+            self.weight_spin.setValue(0)
+            self.start_spin.setValue(0.0)
+            self.end_spin.setValue(0.0)
+            self.allows_ik_check.setChecked(False)
+            self.force_no_blend_check.setChecked(False)
 
-        self.ska_file_edit.setText("")
-        self.weight_spin.setValue(0)
-        self.start_spin.setValue(0.0)
-        self.end_spin.setValue(0.0)
-        self.allows_ik_check.setChecked(False)
-        self.force_no_blend_check.setChecked(False)
+            # Simulate a low version variant to hide conditional fields correctly
+            dummy_variant_for_visibility = AnimationSetVariant(
+                version=0
+            )  # Create a dummy
+            self._update_variant_field_visibility_from_data(
+                dummy_variant_for_visibility
+            )
 
-        # Simulate a low version variant to hide conditional fields correctly
-        dummy_variant_for_visibility = AnimationSetVariant(version=0)  # Create a dummy
-        self._update_variant_field_visibility_from_data(dummy_variant_for_visibility)
-
-        self.loaded_ska_data = None
-        self.ska_editor_group.setVisible(False)
-        self.toggle_ska_edit_button.setText("Show/Edit SKA")
-        self.toggle_ska_edit_button.setEnabled(
-            False
-        )  # Disable SKA button when no variant
-        self.ska_type_label.setText("N/A")
-        self.ska_duration_spin.setValue(0)
-        self.ska_repeat_check.setChecked(False)
-        self.ska_stutter_mode_combo.setCurrentIndex(0)
-
-        for widget in [
-            self.ska_file_edit,
-            self.weight_spin,
-            self.start_spin,
-            self.end_spin,
-            self.allows_ik_check,
-            self.force_no_blend_check,
-            self.ska_duration_spin,
-            self.ska_repeat_check,
-            self.ska_stutter_mode_combo,
-        ]:
-            widget.blockSignals(False)
+            self.loaded_ska_data = None
+            self.ska_editor_group.setVisible(False)
+            self.toggle_ska_edit_button.setText("Show/Edit SKA")
+            self.toggle_ska_edit_button.setEnabled(
+                False
+            )  # Disable SKA button when no variant
+            self.ska_type_label.setText("N/A")
+            self.ska_duration_spin.setValue(0)
+            self.ska_repeat_check.setChecked(False)
+            self.ska_stutter_mode_combo.setCurrentIndex(0)
 
     def _update_variant_data_ui(self, variant_to_display: AnimationSetVariant | None):
         """Helper to populate UI fields from a variant object."""
@@ -203,35 +251,31 @@ class AnimationSetVariantWidget(QGroupBox):
             self.ska_stutter_mode_combo,
             self.toggle_ska_edit_button,
         ]
-        for w in widgets_to_block:
-            w.blockSignals(True)
 
-        self.setTitle(
-            f"Variant: {self.variant.file if self.variant.file else 'New/Untitled Variant'}"
-        )
-        self.ska_file_edit.setText(self.variant.file)
-        self.weight_spin.setValue(self.variant.weight)
-        self.start_spin.setValue(self.variant.start)
-        self.end_spin.setValue(self.variant.end)
-        self.allows_ik_check.setChecked(bool(self.variant.allows_ik))
-        self.force_no_blend_check.setChecked(bool(self.variant.forceNoBlend))
+        with signal_blocker(*widgets_to_block):
+            self.setTitle(
+                f"Variant: {self.variant.file if self.variant.file else 'New/Untitled Variant'}"
+            )
+            self.ska_file_edit.setText(self.variant.file)
+            self.weight_spin.setValue(self.variant.weight)
+            self.start_spin.setValue(self.variant.start)
+            self.end_spin.setValue(self.variant.end)
+            self.allows_ik_check.setChecked(bool(self.variant.allows_ik))
+            self.force_no_blend_check.setChecked(bool(self.variant.forceNoBlend))
 
-        self._update_variant_field_visibility_from_data(self.variant)
+            self._update_variant_field_visibility_from_data(self.variant)
 
-        self.loaded_ska_data = None
-        self.ska_editor_group.setVisible(False)
-        self.toggle_ska_edit_button.setText("Show/Edit SKA")
-        self.toggle_ska_edit_button.setEnabled(
-            bool(self.variant.file)
-        )  # Enable if there's a filename
+            self.loaded_ska_data = None
+            self.ska_editor_group.setVisible(False)
+            self.toggle_ska_edit_button.setText("Show/Edit SKA")
+            self.toggle_ska_edit_button.setEnabled(
+                bool(self.variant.file)
+            )  # Enable if there's a filename
 
-        self.ska_type_label.setText("N/A")
-        self.ska_duration_spin.setValue(0)
-        self.ska_repeat_check.setChecked(False)
-        self.ska_stutter_mode_combo.setCurrentIndex(0)
-
-        for w in widgets_to_block:
-            w.blockSignals(False)
+            self.ska_type_label.setText("N/A")
+            self.ska_duration_spin.setValue(0)
+            self.ska_repeat_check.setChecked(False)
+            self.ska_stutter_mode_combo.setCurrentIndex(0)
 
     def update_variant_data(self, new_variant_data: AnimationSetVariant | None):
         """Public method to update the widget with new variant data."""
@@ -457,21 +501,18 @@ class AnimationSetVariantWidget(QGroupBox):
             self.ska_repeat_check,
             self.ska_stutter_mode_combo,
         ]
-        for w in widgets_to_block:
-            w.blockSignals(True)
-        self.ska_type_label.setText(str(ska.type))
-        self.ska_duration_spin.setValue(ska.duration)
-        self.ska_repeat_check.setChecked(bool(ska.repeat))
-        stutter_index = self.ska_stutter_mode_combo.findData(ska.stutter_mode)
-        if stutter_index != -1:
-            self.ska_stutter_mode_combo.setCurrentIndex(stutter_index)
-        else:
-            self.ska_stutter_mode_combo.setCurrentIndex(0)
-            self.log_widget.log_message(
-                f"Warning: SKA Stutter Mode {ska.stutter_mode} is unexpected. Defaulting display."
-            )
-        for w in widgets_to_block:
-            w.blockSignals(False)
+        with signal_blocker(*widgets_to_block):
+            self.ska_type_label.setText(str(ska.type))
+            self.ska_duration_spin.setValue(ska.duration)
+            self.ska_repeat_check.setChecked(bool(ska.repeat))
+            stutter_index = self.ska_stutter_mode_combo.findData(ska.stutter_mode)
+            if stutter_index != -1:
+                self.ska_stutter_mode_combo.setCurrentIndex(stutter_index)
+            else:
+                self.ska_stutter_mode_combo.setCurrentIndex(0)
+                self.log_widget.log_message(
+                    f"Warning: SKA Stutter Mode {ska.stutter_mode} is unexpected. Defaulting display."
+                )
 
     def update_ska_duration(self, value):
         if self.loaded_ska_data and self.loaded_ska_data.duration != value:
@@ -855,28 +896,29 @@ class AnimationSetEditorWidget(QWidget):
                 self.fly_hit_scale_spin,
                 self.align_to_terrain_check,
             ]
-            for widget in widgets_to_block:
-                widget.blockSignals(True)
-
-            self.version_spin.setValue(self.animation_set_data.version)
-            self.revision_spin.setValue(self.animation_set_data.revision)
-            self.run_speed_spin.setValue(self.animation_set_data.default_run_speed)
-            self.walk_speed_spin.setValue(self.animation_set_data.default_walk_speed)
-            self.mode_change_type_spin.setValue(
-                self.animation_set_data.mode_change_type
-            )
-            self.hovering_ground_check.setChecked(
-                bool(self.animation_set_data.hovering_ground)
-            )
-            self.fly_bank_scale_spin.setValue(self.animation_set_data.fly_bank_scale)
-            self.fly_accel_scale_spin.setValue(self.animation_set_data.fly_accel_scale)
-            self.fly_hit_scale_spin.setValue(self.animation_set_data.fly_hit_scale)
-            self.align_to_terrain_check.setChecked(
-                bool(self.animation_set_data.allign_to_terrain)
-            )
-
-            for widget in widgets_to_block:
-                widget.blockSignals(False)
+            with signal_blocker(*widgets_to_block):
+                self.version_spin.setValue(self.animation_set_data.version)
+                self.revision_spin.setValue(self.animation_set_data.revision)
+                self.run_speed_spin.setValue(self.animation_set_data.default_run_speed)
+                self.walk_speed_spin.setValue(
+                    self.animation_set_data.default_walk_speed
+                )
+                self.mode_change_type_spin.setValue(
+                    self.animation_set_data.mode_change_type
+                )
+                self.hovering_ground_check.setChecked(
+                    bool(self.animation_set_data.hovering_ground)
+                )
+                self.fly_bank_scale_spin.setValue(
+                    self.animation_set_data.fly_bank_scale
+                )
+                self.fly_accel_scale_spin.setValue(
+                    self.animation_set_data.fly_accel_scale
+                )
+                self.fly_hit_scale_spin.setValue(self.animation_set_data.fly_hit_scale)
+                self.align_to_terrain_check.setChecked(
+                    bool(self.animation_set_data.allign_to_terrain)
+                )
 
             self.update_conditional_visibility()
             self.populate_mode_keys_list()
@@ -975,23 +1017,26 @@ class AnimationSetEditorWidget(QWidget):
 
         self.current_mode_key = current_item.data(Qt.ItemDataRole.UserRole)
         if self.current_mode_key:
-            self.mk_key_name_edit.blockSignals(True)
-            self.mk_vis_job_combo.blockSignals(True)
+            widgets_to_block = [
+                self.mk_key_name_edit,
+                self.mk_vis_job_combo,
+            ]
+            with signal_blocker(*widgets_to_block):
+                self.mk_key_name_edit.setText(self.current_mode_key.file)
+                self.mk_type_label.setText(str(self.current_mode_key.type))
 
-            self.mk_key_name_edit.setText(self.current_mode_key.file)
-            self.mk_type_label.setText(str(self.current_mode_key.type))
-
-            # Set VisJob ComboBox
-            vis_job_id = self.current_mode_key.vis_job
-            index = self.mk_vis_job_combo.findData(vis_job_id)
-            if index != -1:
-                self.mk_vis_job_combo.setCurrentIndex(index)
-            else:  # Add temporary item for unknown ID
-                self.mk_vis_job_combo.addItem(f"Unknown (ID: {vis_job_id})", vis_job_id)
-                self.mk_vis_job_combo.setCurrentIndex(self.mk_vis_job_combo.count() - 1)
-
-            self.mk_key_name_edit.blockSignals(False)
-            self.mk_vis_job_combo.blockSignals(False)
+                # Set VisJob ComboBox
+                vis_job_id = self.current_mode_key.vis_job
+                index = self.mk_vis_job_combo.findData(vis_job_id)
+                if index != -1:
+                    self.mk_vis_job_combo.setCurrentIndex(index)
+                else:  # Add temporary item for unknown ID
+                    self.mk_vis_job_combo.addItem(
+                        f"Unknown (ID: {vis_job_id})", vis_job_id
+                    )
+                    self.mk_vis_job_combo.setCurrentIndex(
+                        self.mk_vis_job_combo.count() - 1
+                    )
 
             self.mode_key_details_group.setEnabled(True)
             self.populate_variants_list()
